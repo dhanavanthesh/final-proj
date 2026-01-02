@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+numpy
+pydantic
+motor
+pymongo
+python-dotenv
+websockets
+python-multipart
+hmmlearn
+qiskit
+qiskit-aer
