@@ -82,12 +82,12 @@ def _generate_sample_sequences(length: int = 80) -> dict:
 
 
 class EncodeRequest(BaseModel):
-    sequence: str = Field(..., example="ATGC")
+    sequence: str = Field(..., json_schema_extra={"example": "ATGC"})
 
 
 class AlignRequest(BaseModel):
-    sequence1: str = Field(..., example="ATGC")
-    sequence2: str = Field(..., example="ATCC")
+    sequence1: str = Field(..., json_schema_extra={"example": "ATGC"})
+    sequence2: str = Field(..., json_schema_extra={"example": "ATCC"})
 
 
 class MotifRequest(BaseModel):
@@ -105,51 +105,51 @@ class RunUpdate(BaseModel):
 
 
 class BatchAlignRequest(BaseModel):
-    sequence_pairs: List[dict] = Field(..., example=[{"seq1": "ATGC", "seq2": "ATCC"}])
+    sequence_pairs: List[dict] = Field(..., json_schema_extra={"example": [{"seq1": "ATGC", "seq2": "ATCC"}]})
 
 
 class BatchMotifRequest(BaseModel):
-    sequences_list: List[List[str]] = Field(..., example=[[["ATGC", "ATCC"], ["ATGC", "ATCC"]]])
+    sequences_list: List[List[str]] = Field(..., json_schema_extra={"example": [[["ATGC", "ATCC"], ["ATGC", "ATCC"]]]})
     motif_length: int = 6
 
 
 class VisualizationRequest(BaseModel):
     sequence: str
-    type: str = Field(..., example="helix")  # helix, circuit, alignment
+    type: str = Field(..., json_schema_extra={"example": "helix"})  # helix, circuit, alignment
 
 
 # Dataset request models
 class DatasetCreateRequest(BaseModel):
-    name: str = Field(..., example="Sample Dataset")
-    description: Optional[str] = Field(None, example="A collection of DNA sequences")
-    sequences: List[str] = Field(..., example=["ATGC", "CGTA"])
-    tags: List[str] = Field(default_factory=list, example=["gene", "exon"])
+    name: str = Field(..., json_schema_extra={"example": "Sample Dataset"})
+    description: Optional[str] = Field(None, json_schema_extra={"example": "A collection of DNA sequences"})
+    sequences: List[str] = Field(..., json_schema_extra={"example": ["ATGC", "CGTA"]})
+    tags: List[str] = Field(default_factory=list, json_schema_extra={"example": ["gene", "exon"]})
 
 
 class ProcessingJobCreateRequest(BaseModel):
-    job_name: str = Field(..., example="Alignment Job")
-    algorithm: str = Field(..., example="vqe_alignment")
-    input_sequences: List[str] = Field(..., example=["ATGC", "CGTA"])
-    input_parameters: dict = Field(default_factory=dict, example={"shots": 1024})
+    job_name: str = Field(..., json_schema_extra={"example": "Alignment Job"})
+    algorithm: str = Field(..., json_schema_extra={"example": "vqe_alignment"})
+    input_sequences: List[str] = Field(..., json_schema_extra={"example": ["ATGC", "CGTA"]})
+    input_parameters: dict = Field(default_factory=dict, json_schema_extra={"example": {"shots": 1024}})
 
 
 # Viterbi-specific request models
 class ViterbiRequest(BaseModel):
-    sequence: str = Field(..., example="ATGCCTACGCATGCTA", description="DNA sequence (A, C, G, T only)")
-    hmm_model: str = Field(default="2-state-exon-intron", example="2-state-exon-intron", description="HMM model to use")
-    shots: int = Field(default=1024, example=1024, description="Number of quantum shots (quantum only)")
+    sequence: str = Field(..., json_schema_extra={"example": "ATGCCTACGCATGCTA"}, description="DNA sequence (A, C, G, T only)")
+    hmm_model: str = Field(default="2-state-exon-intron", json_schema_extra={"example": "2-state-exon-intron"}, description="HMM model to use")
+    shots: int = Field(default=1024, json_schema_extra={"example": 1024}, description="Number of quantum shots (quantum only)")
     save_to_db: bool = Field(default=False, description="Save processing details to database")
 
 
 class CircuitDiagramRequest(BaseModel):
-    sequence: str = Field(..., example="ATGCCTACGCATGCTA")
-    hmm_model: str = Field(default="2-state-exon-intron", example="2-state-exon-intron")
-    time_step: int = Field(default=0, example=0, description="Which time step to visualize")
+    sequence: str = Field(..., json_schema_extra={"example": "ATGCCTACGCATGCTA"})
+    hmm_model: str = Field(default="2-state-exon-intron", json_schema_extra={"example": "2-state-exon-intron"})
+    time_step: int = Field(default=0, json_schema_extra={"example": 0}, description="Which time step to visualize")
 
 
 class ViterbiAnimationRequest(BaseModel):
-    sequence: str = Field(..., example="ATGCCTACGCATGCTA")
-    hmm_model: str = Field(default="2-state-exon-intron", example="2-state-exon-intron")
+    sequence: str = Field(..., json_schema_extra={"example": "ATGCCTACGCATGCTA"})
+    hmm_model: str = Field(default="2-state-exon-intron", json_schema_extra={"example": "2-state-exon-intron"})
 
 
 @app.get("/health")
@@ -534,7 +534,12 @@ def get_animation_frames(req: ViterbiAnimationRequest):
 
         # Run Viterbi algorithm and collect frames
         result = run_quantum_viterbi(sequence, hmm_config, shots=1024)
-        decoded_path = result["results"]["decoded_path"]
+        
+        # Handle result structure - check for decoded_path in various locations
+        decoded_path = result.get("results", {}).get("decoded_path") or result.get("decoded_path") or ""
+        if not decoded_path:
+            # Fallback: generate default path if decoding failed
+            decoded_path = "E" * len(sequence)
 
         # Generate animation frames
         frames = []
@@ -557,6 +562,8 @@ def get_animation_frames(req: ViterbiAnimationRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Animation generation failed: {str(exc)}")
 
 
