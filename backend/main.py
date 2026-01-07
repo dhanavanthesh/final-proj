@@ -429,6 +429,11 @@ async def classical_viterbi(req: ViterbiRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
+        # Log the full error for debugging
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(exc)}")
+    except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Classical Viterbi failed: {str(exc)}")
 
 

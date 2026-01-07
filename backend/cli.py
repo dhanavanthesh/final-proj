@@ -13,14 +13,14 @@ from pathlib import Path
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from db import connect_to_mongo, close_mongo_connection
-from mongo_operations import (
+from .db import connect_to_mongo, close_mongo_connection
+from .mongo_operations import (
     save_dataset, get_dataset, list_datasets, delete_dataset,
     create_processing_job, get_processing_job, list_processing_jobs,
     update_processing_job
 )
-from models import Dataset, ProcessingStatus, AlgorithmType
-from processing_logger import create_job_logger
+from .models import Dataset, ProcessingStatus, AlgorithmType
+from .processing_logger import create_job_logger
 
 
 class QGENOMECLI:
