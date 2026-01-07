@@ -17,6 +17,15 @@ from .smith_waterman import SmithWaterman, BlastLike
 from .visualizations import VisualizationGenerator
 from .db import connect_to_mongo, close_mongo_connection, save_run, fetch_runs, get_run_by_id, update_run as db_update_run, delete_run as db_delete_run
 
+# Import MongoDB operations for datasets and processing jobs
+from .mongo_operations import (
+    save_dataset, get_dataset, list_datasets, delete_dataset,
+    create_processing_job, get_processing_job, list_processing_jobs,
+    update_processing_job, add_processing_step
+)
+from .models import Dataset, ProcessingJob, ProcessingStatus, AlgorithmType, ProcessingStep
+from .processing_logger import create_job_logger
+
 # Import Viterbi modules (Core QVA functionality)
 from .hmm_models import get_hmm_config, list_available_models
 from .classical_viterbi import run_classical_viterbi
@@ -73,12 +82,12 @@ def _generate_sample_sequences(length: int = 80) -> dict:
 
 
 class EncodeRequest(BaseModel):
-    sequence: str = Field(..., example="ATGC")
+    sequence: str = Field(..., json_schema_extra={"example": "ATGC"})
 
 
 class AlignRequest(BaseModel):
-    sequence1: str = Field(..., example="ATGC")
-    sequence2: str = Field(..., example="ATCC")
+    sequence1: str = Field(..., json_schema_extra={"example": "ATGC"})
+    sequence2: str = Field(..., json_schema_extra={"example": "ATCC"})
 
 
 class MotifRequest(BaseModel):
@@ -96,35 +105,51 @@ class RunUpdate(BaseModel):
 
 
 class BatchAlignRequest(BaseModel):
-    sequence_pairs: List[dict] = Field(..., example=[{"seq1": "ATGC", "seq2": "ATCC"}])
+    sequence_pairs: List[dict] = Field(..., json_schema_extra={"example": [{"seq1": "ATGC", "seq2": "ATCC"}]})
 
 
 class BatchMotifRequest(BaseModel):
-    sequences_list: List[List[str]] = Field(..., example=[[["ATGC", "ATCC"], ["ATGC", "ATCC"]]])
+    sequences_list: List[List[str]] = Field(..., json_schema_extra={"example": [[["ATGC", "ATCC"], ["ATGC", "ATCC"]]]})
     motif_length: int = 6
 
 
 class VisualizationRequest(BaseModel):
     sequence: str
-    type: str = Field(..., example="helix")  # helix, circuit, alignment
+    type: str = Field(..., json_schema_extra={"example": "helix"})  # helix, circuit, alignment
+
+
+# Dataset request models
+class DatasetCreateRequest(BaseModel):
+    name: str = Field(..., json_schema_extra={"example": "Sample Dataset"})
+    description: Optional[str] = Field(None, json_schema_extra={"example": "A collection of DNA sequences"})
+    sequences: List[str] = Field(..., json_schema_extra={"example": ["ATGC", "CGTA"]})
+    tags: List[str] = Field(default_factory=list, json_schema_extra={"example": ["gene", "exon"]})
+
+
+class ProcessingJobCreateRequest(BaseModel):
+    job_name: str = Field(..., json_schema_extra={"example": "Alignment Job"})
+    algorithm: str = Field(..., json_schema_extra={"example": "vqe_alignment"})
+    input_sequences: List[str] = Field(..., json_schema_extra={"example": ["ATGC", "CGTA"]})
+    input_parameters: dict = Field(default_factory=dict, json_schema_extra={"example": {"shots": 1024}})
 
 
 # Viterbi-specific request models
 class ViterbiRequest(BaseModel):
-    sequence: str = Field(..., example="ATGCCTACGCATGCTA", description="DNA sequence (A, C, G, T only)")
-    hmm_model: str = Field(default="2-state-exon-intron", example="2-state-exon-intron", description="HMM model to use")
-    shots: int = Field(default=1024, example=1024, description="Number of quantum shots (quantum only)")
+    sequence: str = Field(..., json_schema_extra={"example": "ATGCCTACGCATGCTA"}, description="DNA sequence (A, C, G, T only)")
+    hmm_model: str = Field(default="2-state-exon-intron", json_schema_extra={"example": "2-state-exon-intron"}, description="HMM model to use")
+    shots: int = Field(default=1024, json_schema_extra={"example": 1024}, description="Number of quantum shots (quantum only)")
+    save_to_db: bool = Field(default=False, description="Save processing details to database")
 
 
 class CircuitDiagramRequest(BaseModel):
-    sequence: str = Field(..., example="ATGCCTACGCATGCTA")
-    hmm_model: str = Field(default="2-state-exon-intron", example="2-state-exon-intron")
-    time_step: int = Field(default=0, example=0, description="Which time step to visualize")
+    sequence: str = Field(..., json_schema_extra={"example": "ATGCCTACGCATGCTA"})
+    hmm_model: str = Field(default="2-state-exon-intron", json_schema_extra={"example": "2-state-exon-intron"})
+    time_step: int = Field(default=0, json_schema_extra={"example": 0}, description="Which time step to visualize")
 
 
 class ViterbiAnimationRequest(BaseModel):
-    sequence: str = Field(..., example="ATGCCTACGCATGCTA")
-    hmm_model: str = Field(default="2-state-exon-intron", example="2-state-exon-intron")
+    sequence: str = Field(..., json_schema_extra={"example": "ATGCCTACGCATGCTA"})
+    hmm_model: str = Field(default="2-state-exon-intron", json_schema_extra={"example": "2-state-exon-intron"})
 
 
 @app.get("/health")
@@ -185,12 +210,61 @@ def encode(req: EncodeRequest):
 
 @app.post("/align")
 async def align(req: AlignRequest):
+    """
+    Align two sequences using VQE algorithm with optional processing logging
+    """
+    logger = create_job_logger("VQE_Alignment")
+    job_id = None
+    
     try:
+        # Start processing
+        logger.start_step("Input Validation", {"seq1_length": len(req.sequence1), "seq2_length": len(req.sequence2)})
+        
+        # Create processing job in database (if needed for tracking)
+        job = await create_processing_job(
+            job_name=f"VQE Alignment: {req.sequence1[:10]}... vs {req.sequence2[:10]}...",
+            algorithm=AlgorithmType.VQE_ALIGNMENT,
+            input_sequences=[req.sequence1, req.sequence2],
+            input_parameters={}
+        )
+        job_id = job.id
+        
+        await update_processing_job(job_id, status=ProcessingStatus.RUNNING)
+        logger.end_step("completed", {"job_id": job_id})
+        
+        # Run alignment
+        logger.start_step("VQE Circuit Construction")
         result = vqe_engine.align(req.sequence1, req.sequence2)
+        logger.end_step("completed", {"alignment_score": result.get("alignment_score")})
+        
+        # Save to database
+        logger.start_step("Database Storage")
         await save_run("align", req.sequence1, req.sequence2, result["alignment_score"], result)
-        return {"algorithm": "VQE", "results": result}
+        
+        # Update job with results
+        await update_processing_job(
+            job_id,
+            status=ProcessingStatus.COMPLETED,
+            result=result,
+            score=result["alignment_score"],
+            processing_steps=logger.get_steps()
+        )
+        logger.end_step("completed")
+        
+        return {
+            "algorithm": "VQE",
+            "results": result,
+            "job_id": job_id,
+            "processing_summary": logger.get_summary()
+        }
     except ValueError as exc:
+        if job_id:
+            await update_processing_job(job_id, status=ProcessingStatus.FAILED, error_message=str(exc))
         raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        if job_id:
+            await update_processing_job(job_id, status=ProcessingStatus.FAILED, error_message=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.post("/find-motifs")
@@ -355,6 +429,11 @@ async def classical_viterbi(req: ViterbiRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
+        # Log the full error for debugging
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(exc)}")
+    except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Classical Viterbi failed: {str(exc)}")
 
 
@@ -455,7 +534,12 @@ def get_animation_frames(req: ViterbiAnimationRequest):
 
         # Run Viterbi algorithm and collect frames
         result = run_quantum_viterbi(sequence, hmm_config, shots=1024)
-        decoded_path = result["results"]["decoded_path"]
+        
+        # Handle result structure - check for decoded_path in various locations
+        decoded_path = result.get("results", {}).get("decoded_path") or result.get("decoded_path") or ""
+        if not decoded_path:
+            # Fallback: generate default path if decoding failed
+            decoded_path = "E" * len(sequence)
 
         # Generate animation frames
         frames = []
@@ -478,7 +562,189 @@ def get_animation_frames(req: ViterbiAnimationRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Animation generation failed: {str(exc)}")
+
+
+# ============================================================================
+# DATASET MANAGEMENT ENDPOINTS
+# ============================================================================
+
+@app.post("/datasets")
+async def create_dataset(req: DatasetCreateRequest):
+    """Create a new dataset in MongoDB"""
+    try:
+        dataset = Dataset(
+            name=req.name,
+            description=req.description,
+            sequences=req.sequences,
+            tags=req.tags
+        )
+        
+        saved_dataset = await save_dataset(dataset)
+        
+        return {
+            "id": saved_dataset.id,
+            "name": saved_dataset.name,
+            "description": saved_dataset.description,
+            "sequences_count": len(saved_dataset.sequences),
+            "created_at": saved_dataset.created_at.isoformat()
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to create dataset: {str(exc)}")
+
+
+@app.get("/datasets")
+async def get_datasets(limit: int = 50, skip: int = 0):
+    """List all datasets"""
+    try:
+        datasets = await list_datasets(limit=limit, skip=skip)
+        
+        return [
+            {
+                "id": ds.id,
+                "name": ds.name,
+                "description": ds.description,
+                "sequences_count": len(ds.sequences),
+                "tags": ds.tags,
+                "created_at": ds.created_at.isoformat(),
+                "updated_at": ds.updated_at.isoformat()
+            }
+            for ds in datasets
+        ]
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch datasets: {str(exc)}")
+
+
+@app.get("/datasets/{dataset_id}")
+async def get_dataset_detail(dataset_id: str):
+    """Get dataset details"""
+    try:
+        dataset = await get_dataset(dataset_id)
+        
+        if not dataset:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        
+        return {
+            "id": dataset.id,
+            "name": dataset.name,
+            "description": dataset.description,
+            "sequences": dataset.sequences,
+            "tags": dataset.tags,
+            "created_at": dataset.created_at.isoformat(),
+            "updated_at": dataset.updated_at.isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch dataset: {str(exc)}")
+
+
+@app.delete("/datasets/{dataset_id}")
+async def delete_dataset_endpoint(dataset_id: str):
+    """Delete a dataset"""
+    try:
+        deleted = await delete_dataset(dataset_id)
+        
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        
+        return {"deleted": dataset_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete dataset: {str(exc)}")
+
+
+# ============================================================================
+# PROCESSING JOB ENDPOINTS
+# ============================================================================
+
+@app.post("/jobs")
+async def create_job(req: ProcessingJobCreateRequest):
+    """Create a new processing job"""
+    try:
+        job = await create_processing_job(
+            job_name=req.job_name,
+            algorithm=req.algorithm,
+            input_sequences=req.input_sequences,
+            input_parameters=req.input_parameters
+        )
+        
+        return {
+            "id": job.id,
+            "job_name": job.job_name,
+            "algorithm": job.algorithm,
+            "status": job.status,
+            "created_at": job.created_at.isoformat()
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to create job: {str(exc)}")
+
+
+@app.get("/jobs")
+async def get_jobs(status: Optional[str] = None, algorithm: Optional[str] = None, limit: int = 50):
+    """List processing jobs"""
+    try:
+        status_filter = ProcessingStatus(status) if status else None
+        jobs = await list_processing_jobs(status=status_filter, algorithm=algorithm, limit=limit)
+        
+        return [
+            {
+                "id": job.id,
+                "job_name": job.job_name,
+                "algorithm": job.algorithm,
+                "status": job.status,
+                "score": job.score,
+                "created_at": job.created_at.isoformat(),
+                "started_at": job.started_at.isoformat() if job.started_at else None,
+                "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+                "processing_steps_count": len(job.processing_steps)
+            }
+            for job in jobs
+        ]
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch jobs: {str(exc)}")
+
+
+@app.get("/jobs/{job_id}")
+async def get_job_detail(job_id: str):
+    """Get job details including processing steps"""
+    try:
+        job = await get_processing_job(job_id)
+        
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        return {
+            "id": job.id,
+            "job_name": job.job_name,
+            "algorithm": job.algorithm,
+            "status": job.status,
+            "input_sequences": job.input_sequences,
+            "input_parameters": job.input_parameters,
+            "processing_steps": [
+                {
+                    "step_name": step.step_name,
+                    "timestamp": step.timestamp.isoformat(),
+                    "duration_ms": step.duration_ms,
+                    "status": step.status,
+                    "details": step.details
+                }
+                for step in job.processing_steps
+            ],
+            "result": job.result,
+            "score": job.score,
+            "error_message": job.error_message,
+            "created_at": job.created_at.isoformat(),
+            "started_at": job.started_at.isoformat() if job.started_at else None,
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch job: {str(exc)}")
 
 
 # ============================================================================

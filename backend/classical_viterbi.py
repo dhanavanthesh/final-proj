@@ -34,7 +34,8 @@ def run_classical_viterbi(sequence: str, hmm_config: dict) -> dict:
 
     # Convert DNA sequence to integer observations
     # A=0, C=1, G=2, T=3
-    observations = np.array([[base_to_int(base)] for base in cleaned_seq])
+    # New hmmlearn version requires 1D or 2D array
+    observations = np.array([base_to_int(base) for base in cleaned_seq]).reshape(-1, 1)
 
     # Extract HMM parameters
     n_states = hmm_config['n_states']
@@ -43,20 +44,36 @@ def run_classical_viterbi(sequence: str, hmm_config: dict) -> dict:
     trans_prob = hmm_config['trans_prob']
     emit_prob = hmm_config['emit_prob']
 
-    # Create MultinomialHMM model
-    model = hmm.MultinomialHMM(n_components=n_states, n_iter=100)
+    try:
+        # Create CategoricalHMM model (renamed from MultinomialHMM in newer versions)
+        # Try new version first
+        try:
+            model = hmm.CategoricalHMM(n_components=n_states, random_state=42)
+        except AttributeError:
+            # Fall back to MultinomialHMM for older versions
+            model = hmm.MultinomialHMM(n_components=n_states, n_iter=100)
 
-    # Set HMM parameters
-    model.startprob_ = start_prob
-    model.transmat_ = trans_prob
-    model.emissionprob_ = emit_prob
+        # Set HMM parameters
+        model.startprob_ = start_prob
+        model.transmat_ = trans_prob
+        model.emissionprob_ = emit_prob
 
-    # Run Viterbi decoding
-    log_probability, hidden_states = model.decode(observations, algorithm='viterbi')
+        # Run Viterbi decoding
+        # Newer versions might require different API
+        try:
+            hidden_states = model.predict(observations)
+            log_probability = model.score(observations)
+        except TypeError:
+            # Try alternative API for newer hmmlearn
+            hidden_states, log_probability = model.decode(observations, algorithm='viterbi')
 
-    # Convert state indices to state labels
-    decoded_path = [states[int(state)] for state in hidden_states]
-    decoded_path_string = ''.join(decoded_path)
+        # Convert state indices to state labels
+        decoded_path = [states[int(state)] for state in hidden_states]
+        decoded_path_string = ''.join(decoded_path)
+
+    except Exception as e:
+        # If both approaches fail, return error details
+        raise ValueError(f"Failed to run Viterbi: {str(e)}. Ensure sequence is valid DNA (ACGT only)")
 
     # End timer
     end_time = time.perf_counter()
